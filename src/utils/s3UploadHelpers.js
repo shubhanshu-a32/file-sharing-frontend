@@ -4,7 +4,7 @@ import { getApiUrl } from './apiConfig.js';
  * Format bytes to readable human strings (e.g. 5.4 GB, 120 MB)
  */
 export function formatBytes(bytes, decimals = 2) {
-  if (bytes === 0) return '0 Bytes';
+  if (!bytes || bytes === 0) return '0 Bytes';
   const k = 1024;
   const dm = decimals < 0 ? 0 : decimals;
   const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
@@ -33,6 +33,7 @@ export function formatTimer(seconds) {
  * Infer human friendly file type description
  */
 export function getFileTypeLabel(fileName, fileType) {
+  if (!fileName) return 'File';
   const ext = fileName.split('.').pop()?.toLowerCase();
   
   if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(ext)) return `Video (${ext.toUpperCase()})`;
@@ -45,79 +46,107 @@ export function getFileTypeLabel(fileName, fileType) {
 }
 
 /**
- * Multipart Upload Handler for files up to 10GB
+ * Single File Multipart Upload Handler
  */
 export async function performMultipartUpload({ file, code, uploadId, storageKey, onProgress }) {
-  const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB Chunk Size
-  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-  const parts = [];
+  return performBatchMultipartUpload({
+    fileList: [file],
+    code,
+    serverFiles: [{ storageKey, uploadId }],
+    onProgress,
+  });
+}
 
-  let uploadedBytes = 0;
+/**
+ * Multi-File Batch Multipart Upload Handler
+ */
+export async function performBatchMultipartUpload({ fileList, code, serverFiles, onProgress }) {
+  const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB Chunk Size
+  const totalBatchBytes = fileList.reduce((sum, f) => sum + f.size, 0);
+  let totalUploadedBytes = 0;
   const startTime = Date.now();
 
-  for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
-    const start = (partNumber - 1) * CHUNK_SIZE;
-    const end = Math.min(start + CHUNK_SIZE, file.size);
-    const chunk = file.slice(start, end);
+  const fileCompletions = [];
 
-    // Request presigned URL or local endpoint for partNumber
-    const resUrl = await fetch(getApiUrl('/api/upload/presigned-part'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storageKey, uploadId, partNumber }),
-    });
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    const serverFile = serverFiles[i] || {};
+    const storageKey = serverFile.storageKey;
+    const uploadId = serverFile.uploadId;
 
-    if (!resUrl.ok) {
-      throw new Error(`Failed to get presigned URL for part ${partNumber}`);
-    }
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const parts = [];
 
-    const { url } = await resUrl.json();
+    for (let partNumber = 1; partNumber <= totalChunks; partNumber++) {
+      const start = (partNumber - 1) * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
 
-    // Upload chunk via PUT request directly to S3 or Local Endpoint
-    const uploadRes = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': file.type || 'application/octet-stream',
-      },
-      body: chunk,
-    });
-
-    if (!uploadRes.ok) {
-      throw new Error(`Part ${partNumber} upload failed.`);
-    }
-
-    const etagHeader = uploadRes.headers.get('ETag');
-    const etag = etagHeader ? etagHeader.replace(/"/g, '') : `etag_part_${partNumber}`;
-
-    parts.push({
-      ETag: etag,
-      PartNumber: partNumber,
-    });
-
-    uploadedBytes += chunk.size;
-    const elapsedTime = (Date.now() - startTime) / 1000;
-    const speed = uploadedBytes / (elapsedTime || 1); // Bytes per sec
-    const percent = Math.min(100, Math.round((uploadedBytes / file.size) * 100));
-
-    if (onProgress) {
-      onProgress({
-        uploadedBytes,
-        totalBytes: file.size,
-        percent,
-        speed, // bytes/sec
+      const resUrl = await fetch(getApiUrl('/api/upload/presigned-part'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storageKey, uploadId, partNumber }),
       });
+
+      if (!resUrl.ok) {
+        throw new Error(`Failed to get presigned URL for part ${partNumber} of file ${file.name}`);
+      }
+
+      const { url } = await resUrl.json();
+
+      const uploadRes = await fetch(url, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+        body: chunk,
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error(`Part ${partNumber} upload failed for file ${file.name}`);
+      }
+
+      const etagHeader = uploadRes.headers.get('ETag');
+      const etag = etagHeader ? etagHeader.replace(/"/g, '') : `etag_part_${partNumber}`;
+
+      parts.push({
+        ETag: etag,
+        PartNumber: partNumber,
+      });
+
+      totalUploadedBytes += chunk.size;
+      const elapsedTime = (Date.now() - startTime) / 1000;
+      const speed = totalUploadedBytes / (elapsedTime || 1);
+      const percent = Math.min(100, Math.round((totalUploadedBytes / totalBatchBytes) * 100));
+
+      if (onProgress) {
+        onProgress({
+          currentFileIndex: i,
+          currentFileName: file.name,
+          uploadedBytes: totalUploadedBytes,
+          totalBytes: totalBatchBytes,
+          percent,
+          speed,
+        });
+      }
     }
+
+    fileCompletions.push({
+      storageKey,
+      uploadId,
+      parts,
+    });
   }
 
-  // Complete Multipart Upload
+  // Complete Batch Multipart Upload
   const completeRes = await fetch(getApiUrl('/api/upload/complete'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, uploadId, storageKey, parts }),
+    body: JSON.stringify({ code, fileCompletions }),
   });
 
   if (!completeRes.ok) {
-    throw new Error('Failed to finalize multipart upload.');
+    throw new Error('Failed to finalize batch upload.');
   }
 
   return await completeRes.json();

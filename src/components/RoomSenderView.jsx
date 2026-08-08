@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Copy, Check, UserCheck, File, ShieldCheck, XCircle, Share2, Link as LinkIcon, AlertCircle } from 'lucide-react';
+import { Copy, Check, UserCheck, File, ShieldCheck, XCircle, Share2, Link as LinkIcon, Layers } from 'lucide-react';
 import ExpiryTimer from './ExpiryTimer';
 import { formatBytes, getFileTypeLabel } from '../utils/s3UploadHelpers';
 import { socket } from '../utils/socket';
@@ -9,7 +9,7 @@ export default function RoomSenderView({ roomData, onReset }) {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [receiverInfo, setReceiverInfo] = useState(roomData?.receiverInfo || null);
-  const [approvalState, setApprovalState] = useState(roomData?.approvalState || null); // 'approved' | 'rejected'
+  const [approvalState, setApprovalState] = useState(roomData?.approvalState || null);
 
   useEffect(() => {
     if (!roomData?.code) return;
@@ -25,13 +25,11 @@ export default function RoomSenderView({ roomData, onReset }) {
       expiresAt: roomData.expiresAt,
     });
 
-    // Ensure socket is connected & join room as uploader
     if (!socket.connected) {
       socket.connect();
     }
     socket.emit('join-as-uploader', { code: roomData.code });
 
-    // Listen for receiver join & request event
     const handleReceiverJoined = (data) => {
       console.log('[Uploader Socket] Receiver requested download:', data);
       setReceiverInfo(data);
@@ -99,12 +97,15 @@ export default function RoomSenderView({ roomData, onReset }) {
     if (onReset) onReset();
   };
 
+  const files = roomData.files || [{ fileName: roomData.fileName, fileSize: roomData.fileSize, fileType: roomData.fileType }];
+  const totalBatchSize = roomData.totalFileSize || roomData.fileSize || files.reduce((s, f) => s + f.fileSize, 0);
+
   return (
     <div className="glass-panel" style={{ padding: '40px', maxWidth: '680px', margin: '0 auto', textAlign: 'center' }}>
-      {/* Workflow Step Bar */}
+      {/* Step Indicator */}
       <div className="step-bar">
         <div className="step-item">
-          <span className="step-number">1</span> Select File
+          <span className="step-number">1</span> Select Files
         </div>
         <div className="step-divider"></div>
         <div className="step-item">
@@ -124,17 +125,17 @@ export default function RoomSenderView({ roomData, onReset }) {
         File Sharing Room Ready!
       </h2>
       <p style={{ color: 'var(--text-muted)', fontSize: '0.92rem', marginBottom: '20px' }}>
-        Share this 5-digit code or direct link with your recipient.
+        Share this 5-digit code or link with your recipient.
       </p>
 
-      {/* 5-Digit Room Code Display */}
+      {/* Code Card */}
       <div className="room-code-card">
         <span className="room-code-digits">{roomData.code}</span>
       </div>
 
       {/* Copy Actions */}
       <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginBottom: '28px', flexWrap: 'wrap' }}>
-        <button className="btn-secondary" onClick={copyCode}>
+        <button className="btn-secondary active" onClick={copyCode}>
           {copiedCode ? <Check size={18} color="#10b981" /> : <Copy size={18} />}
           {copiedCode ? 'Code Copied!' : 'Copy 5-Digit Code'}
         </button>
@@ -145,34 +146,47 @@ export default function RoomSenderView({ roomData, onReset }) {
         </button>
       </div>
 
-      {/* File Info Card */}
+      {/* Batch Files Info Card */}
       <div className="glass-card" style={{ padding: '20px 24px', textAlign: 'left', marginBottom: '28px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={{
-            width: '46px',
-            height: '46px',
-            borderRadius: '14px',
-            background: 'rgba(6, 182, 212, 0.15)',
-            border: '1px solid rgba(6, 182, 212, 0.3)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexShrink: 0
-          }}>
-            <File size={24} color="#38bdf8" />
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--text-main)', wordBreak: 'break-all' }}>
-              {roomData.fileName}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Layers size={16} color="#38bdf8" /> Shared Batch ({files.length} {files.length === 1 ? 'file' : 'files'})
+          </span>
+          <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#38bdf8', fontFamily: 'var(--font-mono)' }}>
+            Total: {formatBytes(totalBatchSize)}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '200px', overflowY: 'auto' }}>
+          {files.map((file, idx) => (
+            <div key={file.id || idx} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '8px 12px', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.5)' }}>
+              <div style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: '10px',
+                background: 'rgba(6, 182, 212, 0.15)',
+                border: '1px solid rgba(6, 182, 212, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <File size={20} color="#38bdf8" />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {file.fileName}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {formatBytes(file.fileSize)} • {getFileTypeLabel(file.fileName, file.fileType)}
+                </div>
+              </div>
             </div>
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '3px' }}>
-              {formatBytes(roomData.fileSize)} • {getFileTypeLabel(roomData.fileName, roomData.fileType)}
-            </div>
-          </div>
+          ))}
         </div>
       </div>
 
-      {/* Peer Download Authorization Box */}
+      {/* Peer Authorization Box */}
       {receiverInfo ? (
         <div className="glass-card pulse-box" style={{
           padding: '26px',
@@ -187,7 +201,7 @@ export default function RoomSenderView({ roomData, onReset }) {
                 Download Request Received
               </h4>
               <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Recipient <strong style={{ color: '#38bdf8' }}>"{receiverInfo.receiverName}"</strong> entered code <strong>{roomData.code}</strong> and is requesting file access.
+                Recipient <strong style={{ color: '#38bdf8' }}>"{receiverInfo.receiverName}"</strong> entered code <strong>{roomData.code}</strong> and is requesting file access for {files.length} {files.length === 1 ? 'file' : 'files'}.
               </p>
             </div>
           </div>
@@ -205,7 +219,7 @@ export default function RoomSenderView({ roomData, onReset }) {
             }}>
               <ShieldCheck size={22} style={{ flexShrink: 0 }} />
               <span style={{ fontSize: '0.92rem' }}>
-                Download Approved! AWS S3 presigned link dispatched to {receiverInfo.receiverName}.
+                Download Approved! AWS S3 presigned links dispatched to {receiverInfo.receiverName}.
               </span>
             </div>
           ) : approvalState === 'rejected' ? (
