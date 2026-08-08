@@ -5,6 +5,14 @@
       "destination": "http://13.204.29.134/api/:path*"
     },
     {
+      "source": "/socket.io",
+      "destination": "http://13.204.29.134/socket.io"
+    },
+    {
+      "source": "/socket.io/",
+      "destination": "http://13.204.29.134/socket.io/"
+    },
+    {
       "source": "/socket.io/:path*",
       "destination": "http://13.204.29.134/socket.io/:path*"
     }

@@ -8,5 +8,6 @@ const URL = isHttps ? undefined : (import.meta.env.VITE_BACKEND_URL || 'http://l
 
 export const socket = io(URL, {
   autoConnect: true,
+  path: '/socket.io',
   transports: ['polling', 'websocket'],
 });
