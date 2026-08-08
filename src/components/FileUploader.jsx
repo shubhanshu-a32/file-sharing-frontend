@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { UploadCloud, File, User, Clock, CheckCircle2, AlertCircle, Shield, FileSpreadsheet, Film, Image as ImageIcon, Archive } from 'lucide-react';
 import { formatBytes, getFileTypeLabel, performMultipartUpload } from '../utils/s3UploadHelpers';
+import { getApiUrl } from '../utils/apiConfig.js';
 
 export default function FileUploader({ onUploadComplete }) {
   const [uploaderName, setUploaderName] = useState('');
@@ -68,7 +69,7 @@ export default function FileUploader({ onUploadComplete }) {
 
     try {
       // 1. Initiate upload session on backend
-      const initRes = await fetch('/api/upload/initiate', {
+      const initRes = await fetch(getApiUrl('/api/upload/initiate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

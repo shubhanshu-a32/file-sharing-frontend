@@ -1,3 +1,5 @@
+import { getApiUrl } from './apiConfig.js';
+
 /**
  * Manages URL query parameters and sessionStorage state for seamless page refresh recovery
  */
@@ -63,7 +65,7 @@ export function clearActiveSession() {
 
 export async function verifyRoomActive(code) {
   try {
-    const res = await fetch(`/api/upload/room/${code}`);
+    const res = await fetch(getApiUrl(`/api/upload/room/${code}`));
     if (!res.ok) return null;
     const room = await res.json();
     return room;

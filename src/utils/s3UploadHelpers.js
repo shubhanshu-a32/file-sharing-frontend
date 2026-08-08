@@ -1,3 +1,5 @@
+import { getApiUrl } from './apiConfig.js';
+
 /**
  * Format bytes to readable human strings (e.g. 5.4 GB, 120 MB)
  */
@@ -59,7 +61,7 @@ export async function performMultipartUpload({ file, code, uploadId, storageKey,
     const chunk = file.slice(start, end);
 
     // Request presigned URL or local endpoint for partNumber
-    const resUrl = await fetch('/api/upload/presigned-part', {
+    const resUrl = await fetch(getApiUrl('/api/upload/presigned-part'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ storageKey, uploadId, partNumber }),
@@ -108,7 +110,7 @@ export async function performMultipartUpload({ file, code, uploadId, storageKey,
   }
 
   // Complete Multipart Upload
-  const completeRes = await fetch('/api/upload/complete', {
+  const completeRes = await fetch(getApiUrl('/api/upload/complete'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, uploadId, storageKey, parts }),
