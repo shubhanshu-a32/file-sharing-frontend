@@ -9,6 +9,7 @@ import {
   AlertCircle,
   RefreshCw,
   Layers,
+  CheckCircle2,
 } from "lucide-react";
 import ExpiryTimer from "./ExpiryTimer";
 import { formatBytes, getFileTypeLabel } from "../utils/s3UploadHelpers";
@@ -48,8 +49,9 @@ export default function RoomReceiverView({
 
       const urls = data.downloadUrls || [
         {
-          fileName: data.fileName,
-          fileSize: data.fileSize,
+          id: "file_0",
+          fileName: data.fileName || "download_file",
+          fileSize: data.fileSize || 0,
           downloadUrl: data.downloadUrl,
         },
       ];
@@ -65,26 +67,24 @@ export default function RoomReceiverView({
         expiresAt: roomData?.expiresAt,
       });
 
-      // Auto trigger download for all files in batch
-      urls.forEach((item, idx) => {
-        setTimeout(() => {
-          try {
-            const anchor = document.createElement("a");
-            anchor.href = item.downloadUrl;
-            anchor.download = item.fileName || "download";
-            document.body.appendChild(anchor);
-            anchor.click();
-            document.body.removeChild(anchor);
-          } catch (err) {
-            console.error("Auto download trigger error:", err);
-          }
-        }, idx * 600); // 600ms stagger between downloads
-      });
+      // Trigger first file download automatically
+      if (urls.length > 0 && urls[0].downloadUrl) {
+        try {
+          const anchor = document.createElement("a");
+          anchor.href = urls[0].downloadUrl;
+          anchor.download = urls[0].fileName || "download";
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+        } catch (err) {
+          console.error("Auto download trigger error:", err);
+        }
+      }
     };
 
     const handleDownloadRejected = (data) => {
       setIsWaitingApproval(false);
-      setError(data.message || "The uploader declined your download request.");
+      setError(data.message || "The sender declined your download request.");
       clearActiveSession();
     };
 
@@ -174,6 +174,26 @@ export default function RoomReceiverView({
     });
   };
 
+  const handleDownloadAll = () => {
+    if (!downloadUrls || downloadUrls.length === 0) return;
+    downloadUrls.forEach((item, idx) => {
+      setTimeout(() => {
+        try {
+          const anchor = document.createElement("a");
+          anchor.href = item.downloadUrl;
+          anchor.download = item.fileName || `file_${idx + 1}`;
+          anchor.target = "_blank";
+          anchor.rel = "noopener noreferrer";
+          document.body.appendChild(anchor);
+          anchor.click();
+          document.body.removeChild(anchor);
+        } catch (err) {
+          console.error("Batch download error:", err);
+        }
+      }, idx * 700); // 700ms stagger between file downloads
+    });
+  };
+
   const handleResetReceiver = () => {
     clearActiveSession();
     setCode("");
@@ -198,7 +218,7 @@ export default function RoomReceiverView({
   const totalBatchSize =
     roomData?.totalFileSize ||
     roomData?.fileSize ||
-    files.reduce((s, f) => s + f.fileSize, 0);
+    files.reduce((s, f) => s + (f.fileSize || 0), 0);
 
   return (
     <div
@@ -399,7 +419,7 @@ export default function RoomReceiverView({
                 gap: "6px",
               }}
             >
-              <Layers size={16} color="#38bdf8" /> Available Batch (
+              <Layers size={16} color="#38bdf8" /> Shared Files Batch (
               {files.length} {files.length === 1 ? "file" : "files"})
             </span>
             <span
@@ -498,11 +518,32 @@ export default function RoomReceiverView({
               Download Access Approved!
             </h4>
             <p style={{ fontSize: "0.9rem", margin: 0 }}>
-              Batch transfer for {downloadUrls.length} file(s) has started. If
-              automatic downloads were blocked, click individual links below.
+              Batch transfer for{" "}
+              <strong>
+                {downloadUrls.length}{" "}
+                {downloadUrls.length === 1 ? "file" : "files"}
+              </strong>{" "}
+              approved. Click below to download all or individual files.
             </p>
           </div>
 
+          {/* Download All Button */}
+          {downloadUrls.length > 1 && (
+            <button
+              className="btn-primary"
+              style={{
+                width: "100%",
+                marginBottom: "16px",
+                background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                boxShadow: "0 8px 24px rgba(16, 185, 129, 0.35)",
+              }}
+              onClick={handleDownloadAll}
+            >
+              <Download size={20} /> Download All {downloadUrls.length} Files
+            </button>
+          )}
+
+          {/* Individual File Download Cards */}
           <div
             style={{
               display: "flex",
@@ -516,27 +557,52 @@ export default function RoomReceiverView({
                 key={item.id || idx}
                 href={item.downloadUrl}
                 download
-                className="btn-success"
+                className="btn-secondary"
                 style={{
                   width: "100%",
                   textDecoration: "none",
                   display: "flex",
                   justifyContent: "space-between",
-                  padding: "12px 20px",
-                  fontSize: "0.92rem",
+                  alignItems: "center",
+                  padding: "14px 20px",
+                  fontSize: "0.95rem",
+                  borderColor: "rgba(16, 185, 129, 0.3)",
+                  background: "rgba(16, 185, 129, 0.08)",
                 }}
               >
-                <span
+                <div
                   style={{
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    maxWidth: "380px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    minWidth: 0,
                   }}
                 >
-                  Download {item.fileName}
+                  <CheckCircle2 size={18} color="#10b981" />
+                  <span
+                    style={{
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      maxWidth: "340px",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {item.fileName}
+                  </span>
+                </div>
+                <span
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    color: "#6ee7b7",
+                    fontWeight: 600,
+                    fontSize: "0.88rem",
+                  }}
+                >
+                  {formatBytes(item.fileSize)} <Download size={16} />
                 </span>
-                <Download size={18} />
               </a>
             ))}
           </div>
