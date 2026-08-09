@@ -26,13 +26,16 @@ export default function RoomReceiverView({
   initialRoomData = null,
   initialWaiting = false,
   initialDownloadUrl = null,
+  initialDownloadUrls = null,
 }) {
   const [code, setCode] = useState(initialCode);
   const [receiverName, setReceiverName] = useState(initialReceiverName);
   const [roomData, setRoomData] = useState(initialRoomData);
   const [isFetchingRoom, setIsFetchingRoom] = useState(false);
   const [isWaitingApproval, setIsWaitingApproval] = useState(initialWaiting);
-  const [downloadUrls, setDownloadUrls] = useState(null); // Array<{ id, fileName, fileSize, downloadUrl }>
+  const [downloadUrls, setDownloadUrls] = useState(
+    initialDownloadUrls || (initialDownloadUrl ? [{ id: "file_0", fileName: "download_file", fileSize: 0, downloadUrl: initialDownloadUrl }] : null)
+  );
   const [error, setError] = useState(null);
 
   // Sync initial parameters if provided
@@ -43,7 +46,31 @@ export default function RoomReceiverView({
   }, [initialCode]);
 
   useEffect(() => {
+    if (!receiverName.trim()) return;
+
+    const matched = Array.isArray(roomData?.receivers)
+      ? roomData.receivers.find((r) => r.receiverName?.toLowerCase() === receiverName?.trim()?.toLowerCase())
+      : null;
+
+    if (!matched) return;
+
+    if (matched.approvalState === 'rejected' && isWaitingApproval) {
+      setIsWaitingApproval(false);
+      setError('The sender declined your download request.');
+    } else if (matched.approvalState === 'approved' && matched.downloadUrls && !downloadUrls) {
+      setIsWaitingApproval(false);
+      setDownloadUrls(matched.downloadUrls);
+    }
+  }, [roomData, receiverName, isWaitingApproval]);
+
+  useEffect(() => {
     const handleDownloadApproved = (data) => {
+      // Must have receiverName set, and must match event target if specified
+      if (!receiverName || !receiverName.trim()) return;
+      if (data.receiverName && data.receiverName.trim().toLowerCase() !== receiverName.trim().toLowerCase()) {
+        return;
+      }
+
       console.log("[Receiver Socket] Download Approved:", data);
       setIsWaitingApproval(false);
 
@@ -83,16 +110,22 @@ export default function RoomReceiverView({
     };
 
     const handleDownloadRejected = (data) => {
+      // Must have receiverName set, and must match event target if specified
+      if (!receiverName || !receiverName.trim()) return;
+      if (data.receiverName && data.receiverName.trim().toLowerCase() !== receiverName.trim().toLowerCase()) {
+        return;
+      }
       setIsWaitingApproval(false);
       setError(data.message || "The sender declined your download request.");
       clearActiveSession();
     };
 
-    const handleRoomExpired = () => {
+    const handleRoomExpired = (data) => {
       setIsWaitingApproval(false);
-      setError(
-        "This room has expired and the files have been securely deleted.",
-      );
+      const msg = data?.reason === "closed_by_uploader"
+        ? "This room has been closed by the sender and all uploaded files have been permanently deleted from storage."
+        : "This room has expired and the files have been securely deleted.";
+      setError(msg);
       clearActiveSession();
     };
 

@@ -4,52 +4,77 @@ import ExpiryTimer from './ExpiryTimer';
 import { formatBytes, getFileTypeLabel } from '../utils/s3UploadHelpers';
 import { socket } from '../utils/socket';
 import { saveActiveSession, clearActiveSession } from '../utils/sessionStorage';
+import { getApiUrl } from '../utils/apiConfig';
 
 export default function RoomSenderView({ roomData, onReset }) {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [receiverInfo, setReceiverInfo] = useState(roomData?.receiverInfo || null);
-  const [approvalState, setApprovalState] = useState(roomData?.approvalState || null);
+  const [receiversList, setReceiversList] = useState(
+    roomData?.receivers || (roomData?.receiverInfo ? [roomData.receiverInfo] : [])
+  );
 
+  // Sync internal state when roomData prop updates
+  useEffect(() => {
+    if (Array.isArray(roomData?.receivers) && roomData.receivers.length > 0) {
+      setReceiversList(roomData.receivers);
+    }
+  }, [roomData?.receivers]);
+
+  // Persist session whenever receiversList or roomData changes
   useEffect(() => {
     if (!roomData?.code) return;
 
-    // Persist active uploader room state to sessionStorage & URL
     saveActiveSession({
       role: 'sender',
       code: roomData.code,
       uploaderName: roomData.uploaderName,
       roomData,
-      receiverInfo,
-      approvalState,
+      receivers: receiversList,
+      receiverInfo: receiversList[0] || null,
+      approvalState: receiversList[0]?.approvalState || null,
       expiresAt: roomData.expiresAt,
     });
+  }, [roomData, receiversList]);
+
+  // Socket listener setup
+  useEffect(() => {
+    if (!roomData?.code) return;
 
     if (!socket.connected) {
       socket.connect();
     }
     socket.emit('join-as-uploader', { code: roomData.code });
 
-    const handleReceiverJoined = (data) => {
-      console.log('[Uploader Socket] Receiver requested download:', data);
-      setReceiverInfo(data);
-      saveActiveSession({
-        role: 'sender',
-        code: roomData.code,
-        uploaderName: roomData.uploaderName,
-        roomData,
-        receiverInfo: data,
-        approvalState: null,
-        expiresAt: roomData.expiresAt,
-      });
+    const handleReceiversUpdated = (data) => {
+      console.log('[Uploader Socket] Receivers updated:', data);
+      const updated = data.receivers || [];
+      setReceiversList(updated);
     };
 
+    const handleReceiverJoined = (data) => {
+      console.log('[Uploader Socket] Receiver joined:', data);
+      if (data.receivers) {
+        setReceiversList(data.receivers);
+      } else if (data.receiverName) {
+        setReceiversList((prev) => {
+          const cleanName = data.receiverName.trim().toLowerCase();
+          const exists = prev.some((r) => r.receiverName.trim().toLowerCase() === cleanName);
+          if (exists) {
+            return prev.map((r) => r.receiverName.trim().toLowerCase() === cleanName ? { ...r, approvalState: 'pending', socketId: data.socketId || r.socketId } : r);
+          }
+          return [...prev, { id: data.id || data.socketId, receiverName: data.receiverName, approvalState: 'pending' }];
+        });
+      }
+    };
+
+    socket.on('receivers-updated', handleReceiversUpdated);
     socket.on('receiver-joined', handleReceiverJoined);
 
     return () => {
+      socket.off('receivers-updated', handleReceiversUpdated);
       socket.off('receiver-joined', handleReceiverJoined);
     };
-  }, [roomData, approvalState]);
+  }, [roomData?.code]);
 
   const copyCode = () => {
     navigator.clipboard.writeText(roomData.code);
@@ -64,35 +89,45 @@ export default function RoomSenderView({ roomData, onReset }) {
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const approveDownload = () => {
-    socket.emit('approve-download', { code: roomData.code });
-    setApprovalState('approved');
-    saveActiveSession({
-      role: 'sender',
-      code: roomData.code,
-      uploaderName: roomData.uploaderName,
-      roomData,
-      receiverInfo,
-      approvalState: 'approved',
-      expiresAt: roomData.expiresAt,
-    });
+  const approveDownload = (rec) => {
+    const receiverId = typeof rec === 'object' ? rec.id : rec;
+    const receiverName = typeof rec === 'object' ? rec.receiverName : null;
+
+    socket.emit('approve-download', { code: roomData.code, receiverId, receiverName });
+    setReceiversList((prev) =>
+      prev.map((r) =>
+        r.id === receiverId || r.socketId === receiverId || (receiverName && r.receiverName.toLowerCase() === String(receiverName).toLowerCase())
+          ? { ...r, approvalState: 'approved' }
+          : r
+      )
+    );
   };
 
-  const rejectDownload = () => {
-    socket.emit('reject-download', { code: roomData.code });
-    setApprovalState('rejected');
-    saveActiveSession({
-      role: 'sender',
-      code: roomData.code,
-      uploaderName: roomData.uploaderName,
-      roomData,
-      receiverInfo,
-      approvalState: 'rejected',
-      expiresAt: roomData.expiresAt,
-    });
+  const rejectDownload = (rec) => {
+    const receiverId = typeof rec === 'object' ? rec.id : rec;
+    const receiverName = typeof rec === 'object' ? rec.receiverName : null;
+
+    socket.emit('reject-download', { code: roomData.code, receiverId, receiverName });
+    setReceiversList((prev) =>
+      prev.map((r) =>
+        r.id === receiverId || r.socketId === receiverId || (receiverName && r.receiverName.toLowerCase() === String(receiverName).toLowerCase())
+          ? { ...r, approvalState: 'rejected' }
+          : r
+      )
+    );
   };
 
-  const handleCloseRoom = () => {
+  const handleCloseRoom = async () => {
+    if (roomData?.code) {
+      if (socket.connected) {
+        socket.emit('close-room', { code: roomData.code });
+      }
+      try {
+        await fetch(getApiUrl(`/api/upload/room/${roomData.code}/close`), { method: 'POST' });
+      } catch (err) {
+        console.error('Failed to close room via API:', err);
+      }
+    }
     clearActiveSession();
     if (onReset) onReset();
   };
@@ -186,66 +221,90 @@ export default function RoomSenderView({ roomData, onReset }) {
         </div>
       </div>
 
-      {/* Peer Authorization Box */}
-      {receiverInfo ? (
-        <div className="glass-card pulse-box" style={{
-          padding: '26px',
-          border: '1px solid rgba(99, 102, 241, 0.5)',
-          background: 'rgba(20, 27, 48, 0.85)',
-          textAlign: 'left'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px', marginBottom: '18px' }}>
-            <UserCheck size={28} color="#38bdf8" style={{ flexShrink: 0, marginTop: '2px' }} />
-            <div>
-              <h4 style={{ fontSize: '1.15rem', margin: 0, color: 'var(--text-main)' }}>
-                Download Request Received
-              </h4>
-              <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Recipient <strong style={{ color: '#38bdf8' }}>"{receiverInfo.receiverName}"</strong> entered code <strong>{roomData.code}</strong> and is requesting file access for {files.length} {files.length === 1 ? 'file' : 'files'}.
-              </p>
-            </div>
-          </div>
+      {/* Multi-Receiver Peer Authorization List (Line-by-line) */}
+      {receiversList.length > 0 ? (
+        <div style={{ textAlign: 'left', marginBottom: '28px' }}>
+          <h3 style={{ fontSize: '1.1rem', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-main)' }}>
+            <UserCheck size={20} color="#38bdf8" /> Receiver Requests ({receiversList.length})
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {receiversList.map((rec, idx) => (
+              <div
+                key={rec.id || rec.socketId || idx}
+                className="glass-card pulse-box"
+                style={{
+                  padding: '20px 22px',
+                  border: '1px solid rgba(99, 102, 241, 0.4)',
+                  background: 'rgba(20, 27, 48, 0.85)',
+                  textAlign: 'left'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div>
+                    <h4 style={{ fontSize: '1.05rem', margin: 0, color: 'var(--text-main)' }}>
+                      Recipient: <strong style={{ color: '#38bdf8' }}>"{rec.receiverName}"</strong>
+                    </h4>
+                    <span style={{ fontSize: '0.82rem', color: 'var(--text-dim)', marginTop: '2px', display: 'inline-block' }}>
+                      Entered code {roomData.code} • Requesting {files.length} {files.length === 1 ? 'file' : 'files'}
+                    </span>
+                  </div>
 
-          {approvalState === 'approved' ? (
-            <div style={{
-              padding: '14px 18px',
-              borderRadius: '14px',
-              background: 'rgba(16, 185, 129, 0.15)',
-              border: '1px solid rgba(16, 185, 129, 0.4)',
-              color: '#6ee7b7',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px'
-            }}>
-              <ShieldCheck size={22} style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: '0.92rem' }}>
-                Download Approved! AWS S3 presigned links dispatched to {receiverInfo.receiverName}.
-              </span>
-            </div>
-          ) : approvalState === 'rejected' ? (
-            <div style={{
-              padding: '14px 18px',
-              borderRadius: '14px',
-              background: 'rgba(239, 68, 68, 0.15)',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              color: '#fca5a5',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px'
-            }}>
-              <XCircle size={22} style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: '0.92rem' }}>You declined this download request.</span>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', gap: '14px', marginTop: '18px' }}>
-              <button className="btn-success" style={{ flex: 1 }} onClick={approveDownload}>
-                <ShieldCheck size={18} /> Approve Download Access
-              </button>
-              <button className="btn-danger" style={{ flex: 1 }} onClick={rejectDownload}>
-                <XCircle size={18} /> Decline
-              </button>
-            </div>
-          )}
+                  <span style={{
+                    fontSize: '0.78rem',
+                    padding: '4px 12px',
+                    borderRadius: '20px',
+                    fontWeight: 600,
+                    background: rec.approvalState === 'approved' ? 'rgba(16, 185, 129, 0.2)' : rec.approvalState === 'rejected' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(245, 158, 11, 0.2)',
+                    color: rec.approvalState === 'approved' ? '#6ee7b7' : rec.approvalState === 'rejected' ? '#fca5a5' : '#fcd34d',
+                    border: `1px solid ${rec.approvalState === 'approved' ? 'rgba(16, 185, 129, 0.4)' : rec.approvalState === 'rejected' ? 'rgba(239, 68, 68, 0.4)' : 'rgba(245, 158, 11, 0.4)'}`
+                  }}>
+                    {rec.approvalState === 'approved' ? 'Approved' : rec.approvalState === 'rejected' ? 'Declined' : 'Pending Request'}
+                  </span>
+                </div>
+
+                {rec.approvalState === 'approved' ? (
+                  <div style={{
+                    padding: '12px 16px',
+                    borderRadius: '12px',
+                    background: 'rgba(16, 185, 129, 0.15)',
+                    border: '1px solid rgba(16, 185, 129, 0.4)',
+                    color: '#6ee7b7',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    fontSize: '0.88rem'
+                  }}>
+                    <ShieldCheck size={18} style={{ flexShrink: 0 }} />
+                    <span>Download Approved! AWS S3 presigned links dispatched to {rec.receiverName}.</span>
+                  </div>
+                ) : rec.approvalState === 'rejected' ? (
+                  <div style={{
+                    padding: '12px 16px',
+                    borderRadius: '12px',
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    color: '#fca5a5',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    fontSize: '0.88rem'
+                  }}>
+                    <XCircle size={18} style={{ flexShrink: 0 }} />
+                    <span>You declined download access for {rec.receiverName}.</span>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
+                    <button className="btn-success" style={{ flex: 1, padding: '10px 16px', fontSize: '0.88rem' }} onClick={() => approveDownload(rec)}>
+                      <ShieldCheck size={16} /> Approve Access
+                    </button>
+                    <button className="btn-danger" style={{ flex: 1, padding: '10px 16px', fontSize: '0.88rem' }} onClick={() => rejectDownload(rec)}>
+                      <XCircle size={16} /> Decline
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <div style={{
@@ -257,10 +316,10 @@ export default function RoomSenderView({ roomData, onReset }) {
         }}>
           <Share2 size={36} color="#64748b" style={{ marginBottom: '12px' }} />
           <p style={{ margin: 0, fontSize: '0.95rem' }}>
-            Waiting for peer to enter 5-digit code <strong style={{ color: '#38bdf8' }}>{roomData.code}</strong>...
+            Waiting for peers to enter 5-digit code <strong style={{ color: '#38bdf8' }}>{roomData.code}</strong>...
           </p>
           <p style={{ fontSize: '0.82rem', color: 'var(--text-dim)', marginTop: '4px' }}>
-            When recipient connects, you will receive a real-time approval prompt here.
+            When recipients connect, real-time approval prompts will appear line by line here.
           </p>
         </div>
       )}

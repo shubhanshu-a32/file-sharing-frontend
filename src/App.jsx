@@ -21,15 +21,31 @@ export default function App() {
           const room = await verifyRoomActive(stored.code);
           if (room) {
             if (stored.role === 'sender') {
-              setActiveRoom(stored.roomData || room);
+              setActiveRoom({
+                ...(stored.roomData || {}),
+                ...room,
+                receivers: stored.receivers || room.receivers || [],
+                receiverInfo: stored.receiverInfo || room.receiverInfo || null,
+                approvalState: stored.approvalState || room.approvalState || null,
+              });
             } else {
               setActiveTab('receive');
+              const currentReceiverName = stored.receiverName || '';
+              const matchedRec = Array.isArray(room.receivers)
+                ? room.receivers.find((r) => r.receiverName.toLowerCase() === currentReceiverName.toLowerCase())
+                : null;
+
               setRestoredReceiverState({
                 code: stored.code,
-                receiverName: stored.receiverName || '',
-                roomData: stored.roomData || room,
-                isWaitingApproval: Boolean(stored.isWaitingApproval),
-                downloadUrl: stored.downloadUrl || null,
+                receiverName: currentReceiverName || matchedRec?.receiverName || '',
+                roomData: { ...(stored.roomData || {}), ...room },
+                isWaitingApproval: matchedRec
+                  ? matchedRec.approvalState === 'pending'
+                  : stored.isWaitingApproval !== undefined
+                  ? Boolean(stored.isWaitingApproval)
+                  : room.approvalState === 'pending',
+                downloadUrls: matchedRec?.downloadUrls || stored.downloadUrls || room.downloadUrls || null,
+                downloadUrl: stored.downloadUrl || matchedRec?.downloadUrls?.[0]?.downloadUrl || room.downloadUrls?.[0]?.downloadUrl || null,
               });
             }
           } else {
@@ -99,6 +115,7 @@ export default function App() {
             initialRoomData={restoredReceiverState?.roomData || null}
             initialWaiting={restoredReceiverState?.isWaitingApproval || false}
             initialDownloadUrl={restoredReceiverState?.downloadUrl || null}
+            initialDownloadUrls={restoredReceiverState?.downloadUrls || null}
           />
         )}
 
